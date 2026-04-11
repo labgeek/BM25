@@ -1,0 +1,7 @@
+{
+	"malware": 5,
+	"beacon": 4,
+	"powershell": 3,
+	"registry": 2,
+	"invoice": 1
+  }
