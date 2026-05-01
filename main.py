@@ -33,17 +33,24 @@ load_dotenv()
 
 
 def safe_display(value) -> str:
+    """Re-encode a value to the terminal's charset, replacing any characters it cannot represent."""
     text = str(value)
     encoding = sys.stdout.encoding or "utf-8"
     return text.encode(encoding, errors="replace").decode(encoding)
 
 
 def timestamped_path(value) -> str:
+    """Format a file path as a console log line prefixed with the current timestamp."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return f"{timestamp} {safe_display(value)}"
 
 
 def find_documents(base_dir: str):
+    """Recursively crawl base_dir and return resolved paths for all supported document types.
+
+    Supported extensions: .pdf, .doc, .docx, .xls, .xlsx, .txt
+    Raises FileNotFoundError if base_dir does not exist.
+    """
     supported_exts = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".txt"}
     base_path = Path(base_dir)
 
@@ -60,6 +67,11 @@ def find_documents(base_dir: str):
 
 
 def load_search_terms(term_file: str):
+    """Load weighted search terms from a JSON file.
+
+    Expects a JSON object mapping term strings to integer weights, e.g. {"malware": 5}.
+    Raises ValueError if the file does not contain a JSON object.
+    """
     term_path = Path(term_file)
     terms = json.loads(term_path.read_text(encoding="utf-8-sig"))
     if not isinstance(terms, dict):
@@ -68,6 +80,10 @@ def load_search_terms(term_file: str):
 
 
 def extract_text(file_path: Path) -> str:
+    """Dispatch to the appropriate parser based on file extension and return extracted text.
+
+    Returns an empty string for unsupported file types.
+    """
     suffix = file_path.suffix.lower()
     if suffix == ".pdf":
         return parse_pdf(file_path)
@@ -77,10 +93,17 @@ def extract_text(file_path: Path) -> str:
 
 
 def tokenize(text: str) -> list[str]:
+    """Split text into lowercase unicode word tokens using the global TOKEN_PATTERN."""
     return [token.casefold() for token in TOKEN_PATTERN.findall(text)]
 
 
 def build_weighted_query(search_terms: dict[str, int]) -> tuple[list[str], dict[str, int]]:
+    """Convert weighted search terms into a BM25 query token list and a token weight map.
+
+    Each term is tokenized and then repeated in the query list proportional to its weight,
+    so higher-weight terms contribute more to BM25 scoring. Multi-word terms are split into
+    individual tokens. Returns (query_tokens, query_weights).
+    """
     query_tokens = []
     query_weights: dict[str, int] = {}
 
@@ -102,6 +125,12 @@ def build_llm_prompt(
     query_terms: dict[str, int],
     doc_char_limit: int,
 ) -> str:
+    """Build the user-turn prompt for the OpenAI Responses API.
+
+    Embeds the weighted query terms and truncated excerpts from top_docs into a structured
+    prompt that instructs the model to perform evidence-bound relevance analysis.
+    doc_char_limit controls how many characters of each document excerpt are included.
+    """
     lines = [
         "You are performing evidence-based document relevance analysis over BM25 retrieval results.",
         "Your task is to assess which retrieved files are genuinely relevant to the weighted query terms based on the provided excerpts, not merely which files scored highly.",
@@ -194,6 +223,12 @@ def llm_analyze_top_documents(
     top_docs: list[dict[str, object]],
     query_terms: dict[str, int],
 ) -> str:
+    """Send the top BM25-ranked documents to OpenAI for evidence-bound relevance analysis.
+
+    Returns the model's analysis as a string. If OPENAI_API_KEY is not set or top_docs is
+    empty, returns an informational message instead of calling the API.
+    Model, reasoning effort, and excerpt length are controlled by environment variables.
+    """
     if not top_docs:
         return "No BM25-ranked documents were available for LLM analysis."
 
@@ -257,6 +292,13 @@ def build_report(
     skipped_files: dict[Path, str],
     llm_analysis: str,
 ) -> str:
+    """Assemble and return the full triage report as a UTF-8 string.
+
+    The report contains three sections: Analyst Triage Summary (LLM output),
+    Retrieval Outcome (BM25 ranked list with scores and matched tokens), and
+    Immediate Review Priority (top three documents). Skipped files are appended
+    if any were excluded during indexing.
+    """
     lines = [
         "Analyst Triage Summary",
         "======================",
@@ -322,6 +364,11 @@ def build_report(
 
 
 def main():
+    """Run the full document triage pipeline.
+
+    Discovers documents, indexes them with BM25, scores against weighted query terms,
+    sends top results to the LLM for analysis, and writes the final report to OUTPUT/report.txt.
+    """
     doc_dir = "INCOMING_DOCS"
     output_dir = Path("OUTPUT")
     term_file = "config/search_terms.json"
